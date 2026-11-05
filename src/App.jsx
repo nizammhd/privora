@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Gauge, ThreatRadar, History } from "./charts.jsx";
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+
 const post = (url, body) => fetch(url, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -83,10 +85,14 @@ export default function App() {
 
   async function run(event) {
     event.preventDefault();
+    if (import.meta.env.PROD && !API_BASE_URL) {
+      setErr("Scanning requires a deployed PRIVORA backend. Configure VITE_API_BASE_URL in your GitHub repository variables.");
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
-      const result = await post("/api/analyze", {
+      const result = await post(`${API_BASE_URL}/api/analyze`, {
         email: f.email,
         username: f.username,
         password: f.password || null,
@@ -96,7 +102,7 @@ export default function App() {
       setRes(result);
       setPage("exposure");
       try {
-        const historyResponse = await fetch(`/api/history?email=${encodeURIComponent(f.email)}`);
+        const historyResponse = await fetch(`${API_BASE_URL}/api/history?email=${encodeURIComponent(f.email)}`);
         if (!historyResponse.ok) throw new Error("Unable to load scan history.");
         setHist(await historyResponse.json());
       } catch {
