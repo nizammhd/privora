@@ -1,18 +1,33 @@
 import { useState } from "react";
 import { Gauge, ThreatRadar, History } from "./charts.jsx";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+const API_BASE_URL = (import.meta.env.VITE_API_URL || "").trim().replace(/\/+$/, "");
 
-const post = (url, body) => fetch(url, {
+async function apiRequest(path, options) {
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, options);
+  } catch (error) {
+    const reason = error instanceof Error ? ` (${error.message})` : "";
+    throw new Error(`Unable to reach the PRIVORA API. Check backend availability and CORS configuration${reason}.`);
+  }
+
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = body?.detail;
+    const message = Array.isArray(detail)
+      ? detail.map(item => `${item.loc?.join(".") || "request"}: ${item.msg}`).join("; ")
+      : typeof detail === "string" ? detail : `Request failed with status ${response.status}.`;
+    throw new Error(message);
+  }
+  if (body === null) throw new Error("The PRIVORA API returned an invalid response.");
+  return body;
+}
+
+const post = (url, body) => apiRequest(url, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify(body),
-}).then(async response => {
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || "Request failed. Please try again.");
-  }
-  return response.json();
 });
 
 const pages = [
@@ -78,6 +93,8 @@ export default function App() {
   const [page, setPage] = useState("overview");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   const set = key => event => setF(previous => ({
     ...previous,
     [key]: event.target.type === "checkbox" ? event.target.checked : event.target.value,
@@ -85,14 +102,16 @@ export default function App() {
 
   async function run(event) {
     event.preventDefault();
+    setErr("");
     if (import.meta.env.PROD && !API_BASE_URL) {
-      setErr("Scanning requires a deployed PRIVORA backend. Configure VITE_API_BASE_URL in your GitHub repository variables.");
+      setErr("Scanning requires the PRIVORA backend URL. Configure VITE_API_URL in the deployment environment.");
       return;
     }
     setBusy(true);
-    setErr("");
+    setHistoryLoading(true);
+    setHistoryError("");
     try {
-      const result = await post(`${API_BASE_URL}/api/analyze`, {
+      const result = await post("/api/analyze", {
         email: f.email,
         username: f.username,
         password: f.password || null,
@@ -102,14 +121,18 @@ export default function App() {
       setRes(result);
       setPage("exposure");
       try {
-        const historyResponse = await fetch(`${API_BASE_URL}/api/history?email=${encodeURIComponent(f.email)}`);
-        if (!historyResponse.ok) throw new Error("Unable to load scan history.");
-        setHist(await historyResponse.json());
-      } catch {
+        const history = await apiRequest(`/api/history?email=${encodeURIComponent(f.email)}`);
+        if (!Array.isArray(history)) throw new Error("The PRIVORA API returned an invalid history response.");
+        setHist(history);
+      } catch (error) {
         setHist([]);
+        setHistoryError(error.message);
+      } finally {
+        setHistoryLoading(false);
       }
     } catch (error) {
       setErr(error.message);
+      setHistoryLoading(false);
     } finally {
       setBusy(false);
     }
@@ -257,6 +280,8 @@ export default function App() {
                   {res.content.flagged.length > 0 && <div className="flagged-posts"><h3>Posts to review</h3>{res.content.flagged.map((item, index) => <div className="flagged-post" key={index}><span>“{item.text}”</span><small>{item.reasons.join(", ") || "Privacy signal"}</small></div>)}</div>}
                 </article>
               </div>
+              {historyLoading && <p className="source-note" role="status">Loading your scan history…</p>}
+              {historyError && <p className="err" role="alert">Your scan completed, but scan history could not be loaded: {historyError}</p>}
               {sample?.length > 0 && <p className="data-disclaimer">Some results use sample data: {sample.join(", ")}.</p>}
             </>}
           </section>
